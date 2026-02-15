@@ -22,7 +22,6 @@ def conectar_google_sheets():
         st.error(f"⚠️ Error conectando a Sheets: {e}")
         return None
 
-# Inicializar hojas
 sh = conectar_google_sheets()
 if sh:
     ws_deudas = sh.worksheet("Deudas")
@@ -36,7 +35,7 @@ else:
 with st.sidebar:
     st.header("⚙️ Configuración")
     salario = st.number_input("Salario Neto", value=3000000, step=50000)
-    gastos_fijos_base = st.number_input("Gastos Fijos (Casa/Servicios)", value=658000, step=10000)
+    gastos_fijos_base = st.number_input("Gastos Fijos", value=658000, step=10000)
     
     if st.button("🔄 Recargar Datos"):
         st.cache_data.clear()
@@ -50,11 +49,7 @@ try:
     # Cálculos Generales
     total_deuda = df_deudas['Monto'].sum() if not df_deudas.empty else 0
     total_cuotas = df_deudas['Cuota'].sum() if not df_deudas.empty else 0
-    
-    # Sumar gastos hormiga del mes actual (Opcional: filtrar por mes)
     total_gastos_hormiga = df_gastos['Monto'].sum() if not df_gastos.empty else 0
-    
-    # Flujo Real
     flujo_libre = salario - gastos_fijos_base - total_cuotas - total_gastos_hormiga
 
 except Exception as e:
@@ -62,7 +57,7 @@ except Exception as e:
     st.stop()
 
 # === INTERFAZ PRINCIPAL CON PESTAÑAS ===
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Registrar Movimientos", "💬 Chatbot IA"])
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Registrar & Agregar", "💬 Chatbot IA"])
 
 # ---------------- PESTAÑA 1: DASHBOARD ----------------
 with tab1:
@@ -73,7 +68,13 @@ with tab1:
     c1.metric("Deuda Total", f"${total_deuda:,.0f}", delta_color="inverse")
     c2.metric("Gastos Hormiga", f"${total_gastos_hormiga:,.0f}", delta="- variable")
     c3.metric("Flujo Libre Real", f"${flujo_libre:,.0f}")
-    c4.metric("Nivel de Estrés", "Alto" if flujo_libre < 0 else "Bajo")
+    
+    # KPI de Tasa Promedio Ponderada
+    if not df_deudas.empty and 'Tasa' in df_deudas.columns:
+        tasa_promedio = df_deudas['Tasa'].mean()
+        c4.metric("Tasa Interés Promedio", f"{tasa_promedio:.1f}% E.A.")
+    else:
+        c4.metric("Nivel de Estrés", "Calculando...")
 
     st.markdown("---")
     
@@ -86,135 +87,157 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True)
     
     with col_graf2:
-        if not df_gastos.empty:
-            st.subheader("🐜 Tus Gastos Hormiga")
-            fig_gastos = px.bar(df_gastos, x='Concepto', y='Monto', color='Monto')
-            st.plotly_chart(fig_gastos, use_container_width=True)
+        if not df_deudas.empty and 'Tasa' in df_deudas.columns:
+            st.subheader("🔥 Deudas más Peligrosas (Por Interés)")
+            # Ordenamos por tasa para ver la más cara arriba
+            df_sorted = df_deudas.sort_values(by='Tasa', ascending=True)
+            fig_bar = px.bar(df_sorted, x='Tasa', y='Nombre', orientation='h', 
+                             color='Tasa', color_continuous_scale='Reds',
+                             text='Tasa')
+            fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("Agrega tasas de interés a tus deudas para ver este gráfico.")
 
 # ---------------- PESTAÑA 2: REGISTRAR ----------------
 with tab2:
     st.header("Gestionar mi Dinero")
     
+    # --- SECCIÓN: NUEVA DEUDA CON IA ---
+    with st.expander("➕ Crear Nueva Deuda (Con Consulta de Tasa IA)", expanded=True):
+        col_new1, col_new2 = st.columns(2)
+        
+        with col_new1:
+            n_nombre = st.text_input("Nombre Deuda (Ej: RappiCard, Davivienda)")
+            n_monto = st.number_input("Total Deuda", step=50000)
+        
+        with col_new2:
+            n_cuota = st.number_input("Cuota Mensual", step=10000)
+            
+            # --- AQUÍ ESTÁ LA MAGIA DE LA IA ---
+            if "tasa_sugerida" not in st.session_state:
+                st.session_state.tasa_sugerida = 0.0
+
+            col_ia1, col_ia2 = st.columns([1, 2])
+            with col_ia1:
+                if st.button("🕵️ Consultar Tasa IA"):
+                    if n_nombre and "GOOGLE_API_KEY" in st.secrets:
+                        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                        try:
+                            model = genai.GenerativeModel('gemini-2.0-flash')
+                            with st.spinner(f"Investigando tasas de {n_nombre}..."):
+                                prompt = f"""
+                                Estima la Tasa de Interés Efectiva Anual (E.A.) actual en Colombia para un producto de crédito llamado '{n_nombre}'.
+                                Si es tarjeta de crédito, asume la tasa de usura vigente o el promedio del banco.
+                                Si es crédito de vehículo/moto, usa el promedio de mercado.
+                                Si es 'Addi', si es a pocas cuotas es 0, si es largo es aprox 26%.
+                                
+                                RESPONDE SOLO CON EL NÚMERO (Ejemplo: 28.5). No pongas texto.
+                                """
+                                response = model.generate_content(prompt)
+                                # Limpiamos la respuesta para obtener solo el número
+                                texto_limpio = ''.join(c for c in response.text if c.isdigit() or c == '.')
+                                st.session_state.tasa_sugerida = float(texto_limpio)
+                                st.toast(f"Tasa encontrada: {st.session_state.tasa_sugerida}%")
+                        except Exception as e:
+                            st.error(f"Error consultando: {e}")
+                    else:
+                        st.warning("Escribe un nombre primero.")
+
+            with col_ia2:
+                # El usuario puede editar el valor que trajo la IA
+                n_tasa = st.number_input("Tasa Interés E.A. (%)", value=st.session_state.tasa_sugerida, step=0.1, format="%.2f")
+
+        if st.button("Guardar Nueva Deuda"):
+            # Guardamos Nombre, Monto, Cuota y TASA
+            ws_deudas.append_row([n_nombre, n_monto, n_cuota, n_tasa])
+            st.success("Guardada con éxito.")
+            st.cache_data.clear()
+            st.rerun()
+
+    st.markdown("---")
+    
+    # --- SECCIÓN: REGISTRAR PAGOS Y GASTOS ---
     col_reg1, col_reg2 = st.columns(2)
     
-    # --- 1. REGISTRAR GASTO HORMIGA ---
     with col_reg1:
         st.subheader("🐜 Nuevo Gasto Hormiga")
         with st.form("form_gasto"):
             fecha_gasto = st.date_input("Fecha", datetime.today())
-            concepto_gasto = st.text_input("¿En qué gastaste?", placeholder="Ej: Empanada y gaseosa")
+            concepto_gasto = st.text_input("Concepto")
             monto_gasto = st.number_input("Valor ($)", min_value=0, step=1000)
-            
             if st.form_submit_button("Registrar Gasto"):
                 ws_gastos.append_row([str(fecha_gasto), concepto_gasto, monto_gasto])
-                st.success("Gasto guardado. Qué dolor de bolsillo 😅")
+                st.success("Gasto guardado.")
                 st.cache_data.clear()
 
-    # --- 2. REGISTRAR ABONO A DEUDA (¡CON ACTUALIZACIÓN AUTOMÁTICA!) ---
     with col_reg2:
         st.subheader("💳 Abonar a Deuda")
         if not df_deudas.empty:
             lista_nombres = df_deudas['Nombre'].tolist()
             deuda_seleccionada = st.selectbox("¿Qué deuda pagaste?", lista_nombres)
-            
             with st.form("form_pago"):
                 fecha_pago = st.date_input("Fecha Pago", datetime.today())
-                monto_abono = st.number_input("Valor Abonado ($)", min_value=0, step=10000)
-                
+                monto_abono = st.number_input("Valor Abonado", min_value=0, step=10000)
                 if st.form_submit_button("Registrar Pago"):
-                    # 1. Guardar en historial de pagos
                     ws_pagos.append_row([str(fecha_pago), deuda_seleccionada, monto_abono])
-                    
-                    # 2. ACTUALIZAR SALDO EN LA HOJA DE DEUDAS
                     try:
-                        # Buscar la celda donde está el nombre de la deuda
                         cell = ws_deudas.find(deuda_seleccionada)
-                        # El monto está en la columna 2 (B), fila encontrada
                         fila = cell.row
-                        saldo_actual_str = ws_deudas.cell(fila, 2).value
-                        # Limpiamos el valor por si tiene comas o puntos
-                        saldo_actual = float(str(saldo_actual_str).replace(",","").replace("$",""))
-                        
+                        # Leer saldo actual (Columna 2)
+                        saldo_actual_raw = ws_deudas.cell(fila, 2).value
+                        # Limpieza robusta del valor
+                        if isinstance(saldo_actual_raw, str):
+                            saldo_actual = float(saldo_actual_raw.replace(",","").replace("$","").strip())
+                        else:
+                            saldo_actual = float(saldo_actual_raw)
+
                         nuevo_saldo = saldo_actual - monto_abono
                         if nuevo_saldo < 0: nuevo_saldo = 0
-                        
-                        # Actualizamos la celda en Google Sheets
                         ws_deudas.update_cell(fila, 2, nuevo_saldo)
-                        
-                        st.success(f"¡Pago registrado! El nuevo saldo de {deuda_seleccionada} es ${nuevo_saldo:,.0f}")
-                        st.balloons()
+                        st.success(f"Nuevo saldo: ${nuevo_saldo:,.0f}")
                         st.cache_data.clear()
                     except Exception as e:
-                        st.error(f"Se guardó el pago, pero hubo error actualizando el saldo: {e}")
-        else:
-            st.warning("No tienes deudas registradas para pagar.")
-
-    # --- 3. AGREGAR NUEVA DEUDA ---
-    with st.expander("➕ Crear Nueva Deuda (Si te endeudaste más)"):
-        n_nombre = st.text_input("Nombre")
-        n_monto = st.number_input("Total Deuda", step=50000)
-        n_cuota = st.number_input("Cuota", step=10000)
-        if st.button("Guardar Nueva Deuda"):
-            ws_deudas.append_row([n_nombre, n_monto, n_cuota])
-            st.success("Guardada.")
-            st.cache_data.clear()
+                        st.error(f"Error actualizando saldo: {e}")
 
 # ---------------- PESTAÑA 3: CHATBOT IA ----------------
 with tab3:
     st.header("🤖 Tu Asesor Financiero Personal")
-    st.markdown("Pregúntame lo que quieras sobre tus deudas, gastos o pide consejos.")
-
-    # Inicializar historial de chat
+    
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Mostrar mensajes anteriores
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Input del usuario
-    if prompt := st.chat_input("Ej: ¿Cuánto he gastado en hormigas? ó ¿Qué deuda pago primero?"):
-        # Guardar y mostrar mensaje usuario
+    if prompt := st.chat_input("Ej: ¿Cuál deuda debo pagar primero según su tasa de interés?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Preparar respuesta IA
         if "GOOGLE_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             try:
-                # Contexto Financiero Completo
                 contexto = f"""
-                Eres un asesor financiero experto y amigable. Tienes acceso a mis datos en tiempo real:
+                Eres un asesor financiero experto.
                 
-                - Salario Neto: ${salario:,.0f}
-                - Gastos Fijos: ${gastos_fijos_base:,.0f}
-                - Gastos Hormiga Registrados: ${total_gastos_hormiga:,.0f}
-                - Deuda Total Actual: ${total_deuda:,.0f}
-                - Flujo Libre (Dinero sobrante): ${flujo_libre:,.0f}
+                MIS DATOS:
+                - Flujo Libre: ${flujo_libre:,.0f}
                 
-                DETALLE DE MIS DEUDAS:
-                {df_deudas.to_string(index=False) if not df_deudas.empty else "No hay deudas"}
+                MIS DEUDAS (Con Tasas de Interés):
+                {df_deudas.to_string(index=False) if not df_deudas.empty else "Sin deudas"}
                 
-                DETALLE DE MIS GASTOS HORMIGA:
-                {df_gastos.to_string(index=False) if not df_gastos.empty else "No hay gastos"}
+                Pregunta del usuario: "{prompt}"
                 
-                Responde a la pregunta del usuario: "{prompt}"
-                Usa emojis, sé breve y da consejos matemáticos precisos basados en mis números.
+                Instrucción: Si el usuario pregunta qué pagar primero, usa el método AVALANCHA (primero la de mayor Tasa %).
                 """
-                
                 model = genai.GenerativeModel('gemini-2.0-flash')
                 response = model.generate_content(contexto)
                 respuesta_ia = response.text
                 
-                # Mostrar respuesta IA
                 with st.chat_message("assistant"):
                     st.markdown(respuesta_ia)
-                
                 st.session_state.messages.append({"role": "assistant", "content": respuesta_ia})
-                
             except Exception as e:
                 st.error(f"Error IA: {e}")
-        else:
-            st.warning("Configura tu API Key primero.")
