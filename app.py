@@ -115,7 +115,8 @@ if not df_deudas.empty:
                 # --- INTENTO DE DIAGNÓSTICO Y GENERACIÓN ---
                 try:
                     # Intentamos usar el modelo más nuevo
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # --- USA ESTE MODELO EXACTO QUE SÍ TIENES ---
+                    model = genai.GenerativeModel('gemini-2.0-flash')
                     
                     prompt = f"""
                     Analiza mi situación financiera actual:
