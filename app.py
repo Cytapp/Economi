@@ -109,7 +109,8 @@ if not df_deudas.empty:
             # Configurar API Key
             if "GOOGLE_API_KEY" in st.secrets:
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                model = genai.GenerativeModel('gemini-pro')
+                # --- LO NUEVO (PON ESTO) ---
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 
                 prompt = f"""
                 Analiza mi situación financiera actual:
