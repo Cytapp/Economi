@@ -41,19 +41,43 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- CARGA DE DATOS ---
+# --- CARGA Y LIMPIEZA DE DATOS (AQUÍ ESTÁ EL ARREGLO) ---
 try:
-    df_deudas = pd.DataFrame(ws_deudas.get_all_records())
-    df_gastos = pd.DataFrame(ws_gastos.get_all_records())
+    # 1. Cargar datos crudos
+    data_deudas = ws_deudas.get_all_records()
+    df_deudas = pd.DataFrame(data_deudas)
     
-    # Cálculos Generales
+    data_gastos = ws_gastos.get_all_records()
+    df_gastos = pd.DataFrame(data_gastos)
+
+    # 2. LIMPIEZA AUTOMÁTICA DE NÚMEROS (Anti-Error)
+    if not df_deudas.empty:
+        # Limpiar Tasa (Cambiar comas por puntos, quitar %)
+        if 'Tasa' in df_deudas.columns:
+            df_deudas['Tasa'] = df_deudas['Tasa'].astype(str).str.replace(',', '.').str.replace('%', '').str.replace('$', '')
+            df_deudas['Tasa'] = pd.to_numeric(df_deudas['Tasa'], errors='coerce').fillna(0)
+        
+        # Limpiar Monto y Cuota (Quitar signos de pesos y comas de miles)
+        for col in ['Monto', 'Cuota']:
+            if col in df_deudas.columns:
+                df_deudas[col] = df_deudas[col].astype(str).str.replace(',', '').str.replace('$', '').str.replace('.', '')
+                # OJO: Si usas puntos para miles en Excel, esto los quita. 
+                # Si usas puntos para decimales en Monto, avísame. Asumo enteros para montos grandes.
+                df_deudas[col] = pd.to_numeric(df_deudas[col], errors='coerce').fillna(0)
+
+    if not df_gastos.empty:
+        if 'Monto' in df_gastos.columns:
+             df_gastos['Monto'] = df_gastos['Monto'].astype(str).str.replace(',', '').str.replace('$', '')
+             df_gastos['Monto'] = pd.to_numeric(df_gastos['Monto'], errors='coerce').fillna(0)
+    
+    # 3. Cálculos Generales con datos limpios
     total_deuda = df_deudas['Monto'].sum() if not df_deudas.empty else 0
     total_cuotas = df_deudas['Cuota'].sum() if not df_deudas.empty else 0
     total_gastos_hormiga = df_gastos['Monto'].sum() if not df_gastos.empty else 0
     flujo_libre = salario - gastos_fijos_base - total_cuotas - total_gastos_hormiga
 
 except Exception as e:
-    st.error(f"Error leyendo datos: {e}")
+    st.error(f"Error procesando datos: {e}")
     st.stop()
 
 # === INTERFAZ PRINCIPAL CON PESTAÑAS ===
@@ -69,10 +93,15 @@ with tab1:
     c2.metric("Gastos Hormiga", f"${total_gastos_hormiga:,.0f}", delta="- variable")
     c3.metric("Flujo Libre Real", f"${flujo_libre:,.0f}")
     
-    # KPI de Tasa Promedio Ponderada
+    # KPI de Tasa Promedio
     if not df_deudas.empty and 'Tasa' in df_deudas.columns:
-        tasa_promedio = df_deudas['Tasa'].mean()
-        c4.metric("Tasa Interés Promedio", f"{tasa_promedio:.1f}% E.A.")
+        # Filtramos tasas mayores a 0 para el promedio real
+        tasas_reales = df_deudas[df_deudas['Tasa'] > 0]['Tasa']
+        if not tasas_reales.empty:
+            tasa_promedio = tasas_reales.mean()
+            c4.metric("Tasa Interés Promedio", f"{tasa_promedio:.1f}% E.A.")
+        else:
+             c4.metric("Tasa Interés", "0%")
     else:
         c4.metric("Nivel de Estrés", "Calculando...")
 
@@ -89,15 +118,12 @@ with tab1:
     with col_graf2:
         if not df_deudas.empty and 'Tasa' in df_deudas.columns:
             st.subheader("🔥 Deudas más Peligrosas (Por Interés)")
-            # Ordenamos por tasa para ver la más cara arriba
             df_sorted = df_deudas.sort_values(by='Tasa', ascending=True)
             fig_bar = px.bar(df_sorted, x='Tasa', y='Nombre', orientation='h', 
                              color='Tasa', color_continuous_scale='Reds',
                              text='Tasa')
             fig_bar.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
             st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.info("Agrega tasas de interés a tus deudas para ver este gráfico.")
 
 # ---------------- PESTAÑA 2: REGISTRAR ----------------
 with tab2:
@@ -108,13 +134,13 @@ with tab2:
         col_new1, col_new2 = st.columns(2)
         
         with col_new1:
-            n_nombre = st.text_input("Nombre Deuda (Ej: RappiCard, Davivienda)")
+            n_nombre = st.text_input("Nombre Deuda (Ej: RappiCard)")
             n_monto = st.number_input("Total Deuda", step=50000)
         
         with col_new2:
             n_cuota = st.number_input("Cuota Mensual", step=10000)
             
-            # --- AQUÍ ESTÁ LA MAGIA DE LA IA ---
+            # --- MAGIA IA ---
             if "tasa_sugerida" not in st.session_state:
                 st.session_state.tasa_sugerida = 0.0
 
@@ -125,31 +151,24 @@ with tab2:
                         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
                         try:
                             model = genai.GenerativeModel('gemini-2.0-flash')
-                            with st.spinner(f"Investigando tasas de {n_nombre}..."):
+                            with st.spinner(f"Investigando {n_nombre}..."):
                                 prompt = f"""
-                                Estima la Tasa de Interés Efectiva Anual (E.A.) actual en Colombia para un producto de crédito llamado '{n_nombre}'.
-                                Si es tarjeta de crédito, asume la tasa de usura vigente o el promedio del banco.
-                                Si es crédito de vehículo/moto, usa el promedio de mercado.
-                                Si es 'Addi', si es a pocas cuotas es 0, si es largo es aprox 26%.
-                                
-                                RESPONDE SOLO CON EL NÚMERO (Ejemplo: 28.5). No pongas texto.
+                                Estima la Tasa de Interés Efectiva Anual (E.A.) en Colombia para '{n_nombre}'.
+                                RESPONDE SOLO CON EL NÚMERO (Ejemplo: 28.5). Sin texto.
                                 """
                                 response = model.generate_content(prompt)
-                                # Limpiamos la respuesta para obtener solo el número
                                 texto_limpio = ''.join(c for c in response.text if c.isdigit() or c == '.')
-                                st.session_state.tasa_sugerida = float(texto_limpio)
-                                st.toast(f"Tasa encontrada: {st.session_state.tasa_sugerida}%")
+                                if texto_limpio:
+                                    st.session_state.tasa_sugerida = float(texto_limpio)
+                                    st.toast(f"Tasa encontrada: {st.session_state.tasa_sugerida}%")
                         except Exception as e:
                             st.error(f"Error consultando: {e}")
-                    else:
-                        st.warning("Escribe un nombre primero.")
 
             with col_ia2:
-                # El usuario puede editar el valor que trajo la IA
                 n_tasa = st.number_input("Tasa Interés E.A. (%)", value=st.session_state.tasa_sugerida, step=0.1, format="%.2f")
 
         if st.button("Guardar Nueva Deuda"):
-            # Guardamos Nombre, Monto, Cuota y TASA
+            # Convertimos a string para asegurar formato
             ws_deudas.append_row([n_nombre, n_monto, n_cuota, n_tasa])
             st.success("Guardada con éxito.")
             st.cache_data.clear()
@@ -157,7 +176,7 @@ with tab2:
 
     st.markdown("---")
     
-    # --- SECCIÓN: REGISTRAR PAGOS Y GASTOS ---
+    # --- PAGOS Y GASTOS ---
     col_reg1, col_reg2 = st.columns(2)
     
     with col_reg1:
@@ -181,22 +200,21 @@ with tab2:
                 monto_abono = st.number_input("Valor Abonado", min_value=0, step=10000)
                 if st.form_submit_button("Registrar Pago"):
                     ws_pagos.append_row([str(fecha_pago), deuda_seleccionada, monto_abono])
+                    
+                    # Lógica de actualización de saldo
                     try:
                         cell = ws_deudas.find(deuda_seleccionada)
                         fila = cell.row
-                        # Leer saldo actual (Columna 2)
-                        saldo_actual_raw = ws_deudas.cell(fila, 2).value
-                        # Limpieza robusta del valor
-                        if isinstance(saldo_actual_raw, str):
-                            saldo_actual = float(saldo_actual_raw.replace(",","").replace("$","").strip())
-                        else:
-                            saldo_actual = float(saldo_actual_raw)
-
+                        # Obtenemos saldo y limpiamos caracteres
+                        saldo_raw = str(ws_deudas.cell(fila, 2).value).replace(',','').replace('$','')
+                        saldo_actual = float(saldo_raw) if saldo_raw else 0.0
+                        
                         nuevo_saldo = saldo_actual - monto_abono
                         if nuevo_saldo < 0: nuevo_saldo = 0
                         ws_deudas.update_cell(fila, 2, nuevo_saldo)
                         st.success(f"Nuevo saldo: ${nuevo_saldo:,.0f}")
                         st.cache_data.clear()
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error actualizando saldo: {e}")
 
@@ -211,7 +229,7 @@ with tab3:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Ej: ¿Cuál deuda debo pagar primero según su tasa de interés?"):
+    if prompt := st.chat_input("Ej: ¿Cuál deuda debo pagar primero?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -222,15 +240,15 @@ with tab3:
                 contexto = f"""
                 Eres un asesor financiero experto.
                 
-                MIS DATOS:
+                DATOS REALES:
                 - Flujo Libre: ${flujo_libre:,.0f}
+                - Deuda Total: ${total_deuda:,.0f}
                 
-                MIS DEUDAS (Con Tasas de Interés):
+                MIS DEUDAS:
                 {df_deudas.to_string(index=False) if not df_deudas.empty else "Sin deudas"}
                 
                 Pregunta del usuario: "{prompt}"
-                
-                Instrucción: Si el usuario pregunta qué pagar primero, usa el método AVALANCHA (primero la de mayor Tasa %).
+                Responde brevemente.
                 """
                 model = genai.GenerativeModel('gemini-2.0-flash')
                 response = model.generate_content(contexto)
