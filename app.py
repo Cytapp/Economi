@@ -2,119 +2,130 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import plotly.express as px
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Finanzas Pro", page_icon="💸", layout="wide")
+st.set_page_config(page_title="Finanzas Pro DB", page_icon="📈", layout="wide")
 
-# --- ESTILOS VISUALES (CSS) ---
-st.markdown("""
-    <style>
-    .big-font { font-size:20px !important; }
-    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- CONEXIÓN A GOOGLE SHEETS ---
+# Función para conectar a la base de datos (Cacheada para que sea rápida)
+@st.cache_resource
+def conectar_google_sheets():
+    # Usamos los secretos que configuraste en Streamlit
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    # Convertimos el objeto de secretos de Streamlit a credenciales
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+    client = gspread.authorize(creds)
+    # Abrimos la hoja (Asegúrate de que se llame EXACTAMENTE así)
+    sheet = client.open("Finanzas_DB")
+    return sheet
 
-# --- TÍTULO PRINCIPAL ---
-st.title("🚀 Mi Centro de Comando Financiero")
-st.markdown("---")
+try:
+    sh = conectar_google_sheets()
+    worksheet_deudas = sh.worksheet("Deudas")
+    worksheet_historial = sh.worksheet("Resumen")
+except Exception as e:
+    st.error(f"Error conectando a Google Sheets: {e}")
+    st.stop()
 
-# --- CONEXIÓN API (SECRETS) ---
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-else:
-    api_key = st.sidebar.text_input("🔑 API Key Gemini", type="password")
-
-if api_key:
-    genai.configure(api_key=api_key)
-
-# --- BARRA LATERAL (DATOS) ---
+# --- BARRA LATERAL (INPUTS) ---
 with st.sidebar:
-    st.header("📝 Tus Datos")
-    salario = st.number_input("Salario Mensual Neto", value=3000000, step=50000)
-    gastos_fijos = st.number_input("Gastos Fijos (Vivir)", value=658000, step=10000)
+    st.title("💳 Gestión de Datos")
     
+    # Opción para agregar nueva deuda a la BD
+    with st.expander("➕ Agregar Nueva Deuda"):
+        nuevo_nombre = st.text_input("Nombre Deuda")
+        nuevo_monto = st.number_input("Monto Total", step=50000)
+        nueva_cuota = st.number_input("Cuota Mensual", step=10000)
+        
+        if st.button("Guardar en Nube"):
+            if nuevo_nombre:
+                worksheet_deudas.append_row([nuevo_nombre, nuevo_monto, nueva_cuota])
+                st.success("¡Guardado! Recarga la página.")
+                st.cache_data.clear() # Limpiamos caché para ver cambios
+            else:
+                st.warning("Ponle nombre a la deuda")
+
     st.markdown("---")
-    st.subheader("Agregar Deuda")
-    nombre = st.text_input("Nombre (Ej: Addi)")
-    monto = st.number_input("Saldo Total", min_value=0, step=50000)
-    cuota = st.number_input("Cuota Mensual", min_value=0, step=10000)
     
-    if st.button("➕ Agregar Deuda"):
-        if 'deudas' not in st.session_state:
-            st.session_state.deudas = []
-        st.session_state.deudas.append({"Deuda": nombre, "Saldo": monto, "Cuota": cuota})
-        st.success(f"Agregada: {nombre}")
+    # Datos Fijos (Podrías guardarlos en sheets también, pero por ahora aquí)
+    salario = st.number_input("Salario Neto", value=3000000)
+    gastos_fijos = st.number_input("Gastos Fijos", value=658000)
+
+# --- CARGAR DATOS DE LA NUBE ---
+datos_deudas = worksheet_deudas.get_all_records()
+df_deudas = pd.DataFrame(datos_deudas)
 
 # --- PANTALLA PRINCIPAL ---
+st.title("🚀 Mi Tablero Financiero (En la Nube)")
 
-# 1. VISUALIZACIÓN DE DATOS
-if 'deudas' in st.session_state and st.session_state.deudas:
-    # Convertimos datos a Tabla (DataFrame)
-    df = pd.DataFrame(st.session_state.deudas)
-    
-    # Cálculos matemáticos
-    total_deuda = df['Saldo'].sum()
-    total_cuotas = df['Cuota'].sum()
+if not df_deudas.empty:
+    # CÁLCULOS
+    total_deuda = df_deudas['Monto'].sum()
+    total_cuotas = df_deudas['Cuota'].sum()
     flujo_libre = salario - gastos_fijos - total_cuotas
-    
-    # KPIs (Indicadores Grandes)
+
+    # 1. KPIs
     col1, col2, col3 = st.columns(3)
-    col1.metric("Deuda Total", f"${total_deuda:,.0f}", delta_color="inverse")
-    col2.metric("Cuotas Mensuales", f"${total_cuotas:,.0f}", delta="-Obligatorio")
-    col3.metric("Flujo Libre Real", f"${flujo_libre:,.0f}", delta="Disponible", delta_color="normal")
+    col1.metric("Deuda Total", f"${total_deuda:,.0f}")
+    col2.metric("Flujo de Caja Libre", f"${flujo_libre:,.0f}")
+    col3.metric("Deudas Activas", len(df_deudas))
 
-    st.markdown("---")
-
-    # GRÁFICOS INTERACTIVOS
+    # 2. GRÁFICOS DE ESTADO ACTUAL
     c1, c2 = st.columns(2)
-    
     with c1:
-        st.subheader("🍰 ¿A quién le debes más?")
-        # Gráfico de Torta (Dona)
-        fig_pie = px.pie(df, values='Saldo', names='Deuda', hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
+        st.subheader("Tu deuda actual")
+        fig = px.pie(df_deudas, values='Monto', names='Nombre', hole=0.4)
+        st.plotly_chart(fig, use_container_width=True)
+    
     with c2:
-        st.subheader("📊 Peso de la Cuota Mensual")
-        # Gráfico de Barras
-        fig_bar = px.bar(df, x='Deuda', y='Cuota', color='Cuota', color_continuous_scale='Reds')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.subheader("Tu Historial de Progreso")
+        # Leemos el historial
+        datos_hist = worksheet_historial.get_all_records()
+        if datos_hist:
+            df_hist = pd.DataFrame(datos_hist)
+            fig_line = px.line(df_hist, x='Fecha', y='Deuda_Total', markers=True, title="Reducción de Deuda")
+            st.plotly_chart(fig_line, use_container_width=True)
+        else:
+            st.info("Aún no hay historial guardado.")
 
-    # BARRA DE PELIGRO (Ratio de Endeudamiento)
-    ratio = min(total_cuotas / salario, 1.0) # Para que no pase de 100%
-    st.write(f"**Nivel de Endeudamiento: {int(ratio*100)}% de tu sueldo**")
-    if ratio > 0.40:
-        st.progress(ratio, text="⚠️ ¡Cuidado! Tus cuotas son muy altas")
-    else:
-        st.progress(ratio, text="✅ Estás en un nivel manejable")
+    # 3. BOTÓN DE REGISTRAR PROGRESO (Crea el historial)
+    st.markdown("---")
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        if st.button("💾 Guardar 'Foto' del Progreso Hoy"):
+            fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+            # Guardamos: Fecha, Deuda Total, Flujo Libre
+            worksheet_historial.append_row([fecha_hoy, total_deuda, flujo_libre])
+            st.success("¡Historial actualizado! Tu progreso ha sido guardado.")
+            st.cache_data.clear()
+
+    # 4. BOTÓN INTELIGENCIA ARTIFICIAL (GEMINI)
+    with col_btn2:
+        if st.button("✨ Pedir consejo a Gemini"):
+            # Configurar API Key
+            if "GOOGLE_API_KEY" in st.secrets:
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                model = genai.GenerativeModel('gemini-pro')
+                
+                prompt = f"""
+                Analiza mi situación financiera actual:
+                - Deuda Total: ${total_deuda}
+                - Flujo Libre: ${flujo_libre}
+                - Lista de deudas: {datos_deudas}
+                
+                Dime qué acción tomar ESTA SEMANA para mejorar mi situación. Sé breve y directo.
+                """
+                with st.spinner("Consultando..."):
+                    response = model.generate_content(prompt)
+                    st.info(response.text)
+
+    # TABLA DE DETALLE
+    with st.expander("Ver Tabla de Deudas Completa"):
+        st.dataframe(df_deudas)
 
 else:
-    st.info("👈 Usa el menú de la izquierda para agregar tus deudas y ver la magia.")
-
-# --- BOTÓN DE INTELIGENCIA ARTIFICIAL ---
-st.markdown("---")
-if st.button("✨ Generar Estrategia con IA", type="primary"):
-    if 'deudas' not in st.session_state or not st.session_state.deudas:
-        st.error("Agrega deudas primero.")
-    else:
-        with st.spinner('🤖 Gemini está analizando tus gráficos...'):
-            prompt = f"""
-            Eres un experto financiero. Tengo un salario de ${salario}, gastos de ${gastos_fijos}.
-            Mis deudas son: {st.session_state.deudas}.
-            
-            Analiza mi situación basándote en que mi flujo libre es ${flujo_libre}.
-            1. Dame un diagnóstico directo (¿Estoy grave o bien?).
-            2. Crea una tabla con el orden EXACTO de pago (Bola de nieve).
-            3. Dime cuánto dinero extra ponerle a la primera deuda.
-            4. Dame una frase motivadora corta al final.
-            Usa emojis y formato Markdown limpio.
-            """
-            try:
-                model = genai.GenerativeModel('gemini-pro')
-                response = model.generate_content(prompt)
-                
-                st.balloons() # ¡EFECTO ESPECIAL!
-                st.markdown("### 📋 Tu Plan de Libertad Financiera")
-                st.markdown(response.text)
-            except Exception as e:
-                st.error(f"Error: {e}")
+    st.warning("No hay deudas en la base de datos. Agrega una desde el menú lateral.")
