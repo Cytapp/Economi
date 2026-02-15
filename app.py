@@ -3,14 +3,22 @@ import google.generativeai as genai
 
 # Título de la App
 st.title("💰 Mi Asesor Financiero IA")
-st.write("Ingresa tus datos y generaré tu plan personalizado.")
 
-# 1. Configuración de la API (Aquí pegas tu clave o la configuras como secreto)
-# Por seguridad, en un entorno real se usan variables de entorno.
-api_key = st.text_input("Ingresa tu API Key de Google Gemini:", type="password")
+# --- NUEVO CÓDIGO DE SEGURIDAD ---
+# Intentamos obtener la clave desde los "Secretos" de Streamlit
+if "GOOGLE_API_KEY" in st.secrets:
+    api_key = st.secrets["GOOGLE_API_KEY"]
+else:
+    # Si no hay secreto configurado (ej: en tu PC local), la pedimos manual
+    api_key = st.text_input("Ingresa tu API Key de Google Gemini:", type="password")
+# ---------------------------------
 
 if api_key:
     genai.configure(api_key=api_key)
+    st.write("✅ Conectado con Inteligencia Artificial")
+
+    # A PARTIR DE AQUÍ SIGUE TU CÓDIGO NORMAL (Tus Ingresos, Gastos, etc...)
+    # ... (El resto del código que ya tienes no cambia)
 
     # 2. Formulario de Datos
     st.header("1. Tus Ingresos")
