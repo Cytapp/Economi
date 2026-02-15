@@ -5,181 +5,240 @@ import plotly.express as px
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-import requests
-from streamlit_lottie import st_lottie
-from streamlit_extras.metric_cards import style_metric_cards
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Zenith Finance AI", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Zenith Finance Pro", page_icon="💎", layout="wide")
 
-# --- 2. ESTILOS CSS PROFESIONALES ---
+# --- 2. ESTILO CSS AVANZADO (DISEÑO PROFESIONAL) ---
 st.markdown("""
     <style>
-    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
-    [data-testid="stMetric"] {
-        background-color: rgba(255, 255, 255, 0.8) !important;
-        backdrop-filter: blur(10px);
-        border-radius: 20px !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
+    /* Fondo degradado moderno */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
-    .stTabs [data-baseweb="tab-list"] { gap: 20px; }
+    
+    /* Tarjetas de métricas estilizadas */
+    div[data-testid="stMetric"] {
+        background-color: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(10px);
+        padding: 20px !important;
+        border-radius: 20px !important;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1) !important;
+        border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    }
+    
+    /* Títulos y fuentes */
+    h1, h2, h3 {
+        color: #1e3a8a !important;
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Estilo para los botones */
+    .stButton>button {
+        border-radius: 12px;
+        font-weight: 600;
+        transition: all 0.3s;
+        border: none;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    }
+
+    /* Pestañas personalizadas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: rgba(255,255,255,0.5);
+        padding: 10px;
+        border-radius: 15px;
+    }
+
     .stTabs [data-baseweb="tab"] {
-        font-weight: 700;
+        height: 50px;
+        background-color: transparent;
+        border-radius: 10px;
         color: #1e3a8a;
+        font-weight: 700;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background-color: white !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. FUNCIONES DE APOYO (ANIMACIONES Y CONEXIÓN) ---
-def load_lottieurl(url):
-    r = requests.get(url)
-    return r.json() if r.status_code == 200 else None
-
-lottie_wallet = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_y9m8vtbc.json")
-lottie_success = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_s2lryxtd.json")
-
+# --- 3. CONEXIÓN A GOOGLE SHEETS (Lógica Intacta) ---
 @st.cache_resource
 def conectar_google_sheets():
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
         client = gspread.authorize(creds)
-        return client.open("Finanzas_DB")
+        sheet = client.open("Finanzas_DB")
+        return sheet
     except Exception as e:
-        st.error(f"Error de conexión: {e}")
+        st.error(f"⚠️ Error conectando a Sheets: {e}")
         return None
 
-# --- 4. CARGA DE DATOS ---
 sh = conectar_google_sheets()
-if not sh: st.stop()
+if sh:
+    ws_deudas = sh.worksheet("Deudas")
+    ws_historial = sh.worksheet("Resumen")
+    ws_gastos = sh.worksheet("Gastos")
+    ws_pagos = sh.worksheet("Pagos")
+else:
+    st.stop()
 
-ws_deudas = sh.worksheet("Deudas")
-ws_historial = sh.worksheet("Resumen")
-ws_gastos = sh.worksheet("Gastos")
-ws_pagos = sh.worksheet("Pagos")
-
-def get_data():
-    df_d = pd.DataFrame(ws_deudas.get_all_records())
-    df_g = pd.DataFrame(ws_gastos.get_all_records())
-    
-    for df in [df_d, df_g]:
-        if not df.empty:
-            for col in ['Monto', 'Cuota', 'Tasa']:
-                if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace(',', '.').str.replace('$', '').str.replace('%', '')
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    return df_d, df_g
-
-df_deudas, df_gastos = get_data()
-
-# --- 5. SIDEBAR ---
+# --- 4. BARRA LATERAL ---
 with st.sidebar:
-    st_lottie(lottie_wallet, height=120)
-    st.title("Settings")
-    salario = st.number_input("Salario Mensual", value=3000000)
-    gastos_fijos_base = st.number_input("Gastos Fijos Base", value=658000)
-    if st.button("🔄 Refrescar Nube", use_container_width=True):
+    st.markdown("# ⚙️ Configuración")
+    salario = st.number_input("Salario Neto Mensual", value=3000000, step=50000)
+    gastos_fijos_base = st.number_input("Gastos Fijos", value=658000, step=10000)
+    
+    st.divider()
+    if st.button("🔄 Sincronizar Datos", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+    
+    st.image("https://cdn-icons-png.flaticon.com/512/1611/1611154.png", width=100)
 
-# --- 6. CÁLCULOS ---
-total_deuda = df_deudas['Monto'].sum() if not df_deudas.empty else 0
-total_cuotas = df_deudas['Cuota'].sum() if not df_deudas.empty else 0
-total_hormiga = df_gastos['Monto'].sum() if not df_gastos.empty else 0
-flujo_libre = salario - gastos_fijos_base - total_cuotas - total_hormiga
+# --- 5. CARGA Y LIMPIEZA DE DATOS ---
+try:
+    df_deudas = pd.DataFrame(ws_deudas.get_all_records())
+    df_gastos = pd.DataFrame(ws_gastos.get_all_records())
+    
+    # Limpieza robusta para cálculos
+    if not df_deudas.empty:
+        for col in ['Monto', 'Cuota', 'Tasa']:
+            if col in df_deudas.columns:
+                df_deudas[col] = df_deudas[col].astype(str).str.replace(',', '.').str.replace('$', '').str.replace('%', '')
+                df_deudas[col] = pd.to_numeric(df_deudas[col], errors='coerce').fillna(0)
 
-# --- 7. DASHBOARD PRINCIPAL ---
-st.title("💎 Zenith Finance AI Master")
+    if not df_gastos.empty:
+        df_gastos['Monto'] = pd.to_numeric(df_gastos['Monto'], errors='coerce').fillna(0)
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Deuda Total", f"${total_deuda:,.0f}")
-col2.metric("Pagos del Mes", f"${total_cuotas:,.0f}")
-col3.metric("Gastos Hormiga", f"${total_hormiga:,.0f}")
-col4.metric("Flujo Disponible", f"${flujo_libre:,.0f}")
-style_metric_cards(border_left_color="#1e3a8a")
+    total_deuda = df_deudas['Monto'].sum() if not df_deudas.empty else 0
+    total_cuotas = df_deudas['Cuota'].sum() if not df_deudas.empty else 0
+    total_gastos_hormiga = df_gastos['Monto'].sum() if not df_gastos.empty else 0
+    flujo_libre = salario - gastos_fijos_base - total_cuotas - total_gastos_hormiga
 
-tab1, tab2, tab3 = st.tabs(["📊 ANÁLISIS", "💸 OPERACIONES", "🤖 CHAT ASESOR"])
+except Exception as e:
+    st.error(f"Error procesando datos: {e}")
+    st.stop()
 
-# --- PESTAÑA 1: ANÁLISIS ---
+# --- 6. INTERFAZ PRINCIPAL ---
+st.title("💎 Mi Centro Financiero Inteligente")
+st.markdown("---")
+
+# KPIs Destacados
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Deuda Total", f"${total_deuda:,.0f}")
+c2.metric("Gastos Hormiga", f"${total_gastos_hormiga:,.0f}")
+c3.metric("Flujo Libre", f"${flujo_libre:,.0f}", delta=f"${flujo_libre:,.0f}")
+c4.metric("Estrés Financiero", "Bajo" if flujo_libre > 0 else "Crítico")
+
+tab1, tab2, tab3 = st.tabs(["📊 DASHBOARD", "📝 OPERACIONES", "🤖 ASESOR IA"])
+
+# ---------------- TAB 1: DASHBOARD ----------------
 with tab1:
-    c1, c2 = st.columns([1.2, 0.8])
-    with c1:
-        st.subheader("🔥 Riesgo por Tasa de Interés")
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        if not df_deudas.empty:
+            st.subheader("🍰 Distribución de Deudas")
+            fig = px.pie(df_deudas, values='Monto', names='Nombre', hole=0.5,
+                         color_discrete_sequence=px.colors.sequential.RdBu)
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col_g2:
         if not df_deudas.empty and 'Tasa' in df_deudas.columns:
-            fig_bar = px.bar(df_deudas.sort_values('Tasa'), x='Tasa', y='Nombre', orientation='h', 
+            st.subheader("🔥 Ranking de Intereses (Avalancha)")
+            df_sorted = df_deudas.sort_values(by='Tasa', ascending=True)
+            fig_bar = px.bar(df_sorted, x='Tasa', y='Nombre', orientation='h', 
                              color='Tasa', color_continuous_scale='Reds', text_auto='.1f')
             st.plotly_chart(fig_bar, use_container_width=True)
-    with c2:
-        st.subheader("🎯 Concentración de Capital")
-        if not df_deudas.empty:
-            fig_pie = px.pie(df_deudas, values='Monto', names='Nombre', hole=0.5)
-            st.plotly_chart(fig_pie, use_container_width=True)
 
-# --- PESTAÑA 2: OPERACIONES ---
+# ---------------- TAB 2: OPERACIONES ----------------
 with tab2:
-    col_a, col_b = st.columns(2)
+    col_op1, col_op2 = st.columns(2)
     
-    with col_a:
+    with col_op1:
         with st.container(border=True):
-            st.subheader("➕ Nueva Deuda")
-            n_n = st.text_input("Nombre de Entidad")
-            n_m = st.number_input("Saldo", step=100000)
-            n_c = st.number_input("Cuota", step=10000)
-            
-            if "tasa_ia" not in st.session_state: st.session_state.tasa_ia = 0.0
-            
-            if st.button("🕵️ Consultar Tasa con IA"):
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                model = genai.GenerativeModel('gemini-2.0-flash')
-                res = model.generate_content(f"Tasa E.A. promedio en Colombia para {n_n}. Solo número.")
-                st.session_state.tasa_ia = float(''.join(c for c in res.text if c.isdigit() or c == '.'))
-                st.rerun()
-            
-            n_t = st.number_input("Tasa % E.A.", value=st.session_state.tasa_ia)
-            if st.button("Guardar Deuda en Nube", type="primary"):
-                ws_deudas.append_row([n_n, n_m, n_c, n_t])
-                st.success("Guardado!"); st.cache_data.clear(); st.rerun()
+            st.subheader("🐜 Gasto Hormiga")
+            with st.form("f_gasto", clear_on_submit=True):
+                f_g = st.date_input("Fecha", datetime.today())
+                c_g = st.text_input("¿Qué compraste?")
+                m_g = st.number_input("Monto ($)", min_value=0, step=1000)
+                if st.form_submit_button("Registrar Gasto ✍️"):
+                    ws_gastos.append_row([str(f_g), c_g, m_g])
+                    st.success("Gasto registrado")
+                    st.cache_data.clear()
 
-    with col_b:
         with st.container(border=True):
-            st.subheader("💳 Registrar Pago")
+            st.subheader("➕ Nueva Deuda / Crédito")
+            with st.form("f_deuda", clear_on_submit=True):
+                n_n = st.text_input("Nombre Entidad")
+                n_m = st.number_input("Saldo Total", step=100000)
+                n_c = st.number_input("Cuota Mensual", step=10000)
+                n_t = st.number_input("Tasa E.A. %", step=0.1)
+                if st.form_submit_button("Guardar en Nube ☁️"):
+                    ws_deudas.append_row([n_n, n_m, n_c, n_t])
+                    st.success("Deuda agregada")
+                    st.cache_data.clear()
+
+    with col_op2:
+        with st.container(border=True):
+            st.subheader("💳 Registrar Abono / Pago")
             if not df_deudas.empty:
-                target = st.selectbox("Deuda pagada", df_deudas['Nombre'].tolist())
-                abono = st.number_input("Monto abonado", step=50000)
-                if st.button("Confirmar Abono ✅"):
+                target = st.selectbox("Selecciona la deuda", df_deudas['Nombre'].tolist())
+                abono = st.number_input("Valor pagado ($)", min_value=0, step=50000)
+                
+                if st.button("Confirmar Pago ✅", use_container_width=True, type="primary"):
                     ws_pagos.append_row([str(datetime.today().date()), target, abono])
-                    cell = ws_deudas.find(target)
-                    fila = cell.row
-                    actual = float(str(ws_deudas.cell(fila, 2).value).replace(',',''))
-                    ws_deudas.update_cell(fila, 2, max(0, actual - abono))
-                    st_lottie(lottie_success, height=150)
-                    st.balloons(); st.cache_data.clear(); st.rerun()
+                    try:
+                        cell = ws_deudas.find(target)
+                        fila = cell.row
+                        saldo_raw = str(ws_deudas.cell(fila, 2).value).replace(',','').replace('$','')
+                        nuevo_saldo = max(0, float(saldo_raw) - abono)
+                        ws_deudas.update_cell(fila, 2, nuevo_saldo)
+                        st.balloons()
+                        st.success(f"¡Pagado! Nuevo saldo: ${nuevo_saldo:,.0f}")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            else:
+                st.info("No hay deudas para pagar.")
 
-        with st.container(border=True):
-            st.subheader("☕ Gasto Hormiga")
-            conc_h = st.text_input("Concepto")
-            mont_h = st.number_input("Valor", step=1000, key="h1")
-            if st.button("Registrar Gasto 🐜"):
-                ws_gastos.append_row([str(datetime.today().date()), conc_h, mont_h])
-                st.toast("Gasto anotado!"); st.cache_data.clear(); st.rerun()
-
-# --- PESTAÑA 3: CHATBOT ---
+# ---------------- TAB 3: CHATBOT IA ----------------
 with tab3:
-    st.subheader("💬 Inteligencia Financiera")
-    if "messages" not in st.session_state: st.session_state.messages = []
+    st.subheader("🤖 Tu Consultor Gemini 2.0")
     
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    if p := st.chat_input("¿Cómo voy con mis deudas?"):
-        st.session_state.messages.append({"role": "user", "content": p})
-        with st.chat_message("user"): st.markdown(p)
-        
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        ctx = f"Datos: Deuda ${total_deuda}, Flujo ${flujo_libre}. Deudas detalladas: {df_deudas.to_dict()}. Pregunta: {p}"
-        response = model.generate_content(ctx).text
-        
-        with st.chat_message("assistant"): st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    if prompt := st.chat_input("¿Qué me aconsejas hoy?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        if "GOOGLE_API_KEY" in st.secrets:
+            genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+            try:
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                contexto = f"""Asesor financiero experto. Datos: Salario ${salario}, 
+                Deuda Total ${total_deuda}, Flujo Libre ${flujo_libre}. 
+                Deudas: {df_deudas.to_dict()}. Pregunta: {prompt}"""
+                
+                with st.spinner("Analizando tus finanzas..."):
+                    res = model.generate_content(contexto).text
+                    with st.chat_message("assistant"):
+                        st.markdown(res)
+                    st.session_state.messages.append({"role": "assistant", "content": res})
+            except Exception as e:
+                st.error(f"Error IA: {e}")
